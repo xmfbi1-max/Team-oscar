@@ -3,11 +3,10 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>تصويت الغداء</title>
+  <title>تيم اوسكار</title>
   <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700;900&display=swap" rel="stylesheet">
-  <script crossorigin src="https://unpkg.com/react@18/umd/react.development.js"></script>
-  <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
-  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-app.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-database.js"></script>
   <style>
     @keyframes fadeIn { from{opacity:0;transform:translateY(12px)} to{opacity:1;transform:translateY(0)} }
     @keyframes pop { 0%{transform:scale(1)} 40%{transform:scale(1.05)} 100%{transform:scale(1)} }
@@ -23,6 +22,20 @@
   <script type="text/babel">
     const { useState, useEffect, useCallback, useRef } = React;
 
+    // Firebase configuration - Replace with your own Firebase project config
+    const firebaseConfig = {
+      apiKey: "AIzaSyD_example_key", // Replace with your API key
+      authDomain: "your-project.firebaseapp.com", // Replace with your auth domain
+      databaseURL: "https://your-project-default-rtdb.firebaseio.com", // Replace with your database URL
+      projectId: "your-project-id", // Replace with your project ID
+      storageBucket: "your-project.appspot.com", // Replace with your storage bucket
+      messagingSenderId: "123456789", // Replace with your sender ID
+      appId: "1:123456789:web:abcdef123456" // Replace with your app ID
+    };
+
+    firebase.initializeApp(firebaseConfig);
+    const database = firebase.database();
+
     const QUESTION = "من هوا افضل مصمم في تيم اوسكار؟";
     const OPTIONS = [
       { id: "new", label: "ابو محمد" },
@@ -36,17 +49,12 @@
     const MY_VOTE_KEY = "lunch-poll-myvote-v1";
     const EMPTY_VOTES = { new: 0, office: 0, regular: 0, any: 0 };
 
-    function parseVotes(stored) {
-      if (!stored) return { ...EMPTY_VOTES };
-      try {
-        const parsed = JSON.parse(stored.value);
-        return OPTIONS.reduce((acc, o) => {
-          acc[o.id] = Number(parsed[o.id]) || 0;
-          return acc;
-        }, {});
-      } catch {
-        return { ...EMPTY_VOTES };
-      }
+    function parseVotes(data) {
+      if (!data) return { ...EMPTY_VOTES };
+      return OPTIONS.reduce((acc, o) => {
+        acc[o.id] = Number(data[o.id]) || 0;
+        return acc;
+      }, {});
     }
 
     function hexToRgb(hex) {
@@ -68,17 +76,18 @@
       const totalVotes = Object.values(votes).reduce((a, b) => a + b, 0);
 
       const loadVotes = useCallback(() => {
-        try {
-          const stored = localStorage.getItem(STORAGE_KEY);
-          setVotes(parseVotes({value: stored}));
-        } catch {}
-        setLoading(false);
+        const votesRef = database.ref(STORAGE_KEY);
+        votesRef.on('value', (snapshot) => {
+          const data = snapshot.val();
+          setVotes(parseVotes(data));
+          setLoading(false);
+        });
+        return () => votesRef.off();
       }, []);
 
       useEffect(() => {
-        loadVotes();
-        const interval = setInterval(loadVotes, 3000);
-        return () => clearInterval(interval);
+        const unsubscribe = loadVotes();
+        return unsubscribe;
       }, [loadVotes]);
 
       const handleVote = (optionId) => {
@@ -89,20 +98,22 @@
         setAnimating(optionId);
         try { localStorage.setItem(MY_VOTE_KEY, optionId); } catch {}
 
-        try {
-          const stored = localStorage.getItem(STORAGE_KEY);
-          const latest = parseVotes({value: stored});
-          const newVotes = { ...latest, [optionId]: latest[optionId] + 1 };
-          localStorage.setItem(STORAGE_KEY, JSON.stringify(newVotes));
-          setVotes(newVotes);
-        } catch {
-          setVotes(prev => ({ ...prev, [optionId]: prev[optionId] + 1 }));
-        }
-
-        setTimeout(() => {
-          setAnimating(null);
-          isVotingRef.current = false;
-        }, 600);
+        const votesRef = database.ref(STORAGE_KEY);
+        votesRef.transaction((currentVotes) => {
+          const latest = currentVotes || { ...EMPTY_VOTES };
+          return { ...latest, [optionId]: (latest[optionId] || 0) + 1 };
+        }, (error, committed, snapshot) => {
+          if (error) {
+            console.error('Transaction failed: ', error);
+            setVotes(prev => ({ ...prev, [optionId]: prev[optionId] + 1 }));
+          } else if (committed) {
+            // Transaction succeeded, votes will be updated via listener
+          }
+          setTimeout(() => {
+            setAnimating(null);
+            isVotingRef.current = false;
+          }, 600);
+        });
       };
 
       const getPercent = (id) => {
